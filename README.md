@@ -1,62 +1,103 @@
 
-# Preference-Aware LLM Fine-Tuning
+# Preference-Aware LLM Fine-Tuning with Gemma-2 and LoRA
 
-## Overview
+This project demonstrates fine-tuning the **Gemma-2 9b Instruct** model with LoRA adapters, using a 4-bit quantized setup. The focus is on fine-tuning for **sequence classification** tasks with preference-aware learning techniques. The implementation leverages **PEFT**, **LoRA**, and **transformers** for efficient model fine-tuning and inference.
 
-With the rise of large language models (LLMs), ensuring that AI-generated responses align with human preferences has become a key challenge. This project focuses on building a machine learning model to predict user preferences in head-to-head interactions between two anonymous LLMs. The project leverages cutting-edge techniques such as reinforcement learning from human feedback (RLHF), and parameter-efficient fine-tuning (PEFT), with a particular focus on overcoming common biases.
+## Features
+- **4-bit Quantization**: Optimize large models for faster training and inference.
+- **LoRA Adapters**: Efficiently fine-tune the attention layers while reducing the number of trainable parameters.
+- **Preference-Aware Learning**: Fine-tune models to handle scenarios where different responses have varying levels of preference.
+- **Multi-GPU Support**: Use multiple GPUs during inference for faster results.
 
-The goal is to predict which model's response a user will prefer, allowing for the development of more personalized and user-friendly AI-driven chat systems.
 
-## Key Features
+### Training
 
-- **Multi-Model Inference**: This project employs two distinct models—Gemma-2 and Llama—to predict user preferences. Each model processes the inputs separately, and the final predictions are aggregated to enhance accuracy.
-- **Parameter-Efficient Fine-Tuning (PEFT)**: LoRA (Low-Rank Adaptation) is used for fine-tuning the models to save memory while maintaining model performance.
-- **Bias Mitigation**: The project tackles several known biases in human preference prediction, such as verbosity bias, position bias, and self-enhancement bias.
+The training script `training.ipynb` fine-tunes the model on a custom dataset. Key configurations are handled through the `Config` class, which includes batch sizes, learning rates, and LoRA parameters. Below is a snippet of the key configuration:
 
-## Project Workflow
+```python
+@dataclass
+class Config:
+    output_dir: str = "output"
+    checkpoint: str = "unsloth/gemma-2-9b-it-bnb-4bit"
+    max_length: int = 3120
+    per_device_train_batch_size: int = 2
+    gradient_accumulation_steps: int = 6
+    lr: float = 1e-4
+    n_epochs: int = 1
+    lora_r: int = 128
+    lora_alpha: float = lora_r * 1
+    freeze_layers: int = 16
+```
 
-1. **Data Loading and Processing**: The input data, consisting of user prompts and model responses, is pre-processed and tokenized using specialized tokenizers for both the Gemma and Llama models.
-2. **Model Inference**: The data is then passed through two fine-tuned models for inference. Both models predict the probability of each response being preferred by the user, and these results are averaged to obtain the final prediction.
-3. **Parallel Processing**: The inference is optimized through multi-threading, enabling both models to run in parallel across multiple GPUs, significantly reducing the computational time.
-4. **Post-Inference Aggregation**: The results from both models are combined to form the final predictions, ensuring more robust outcomes.
+#### LoRA Configuration
 
-## Model Architecture
+Fine-tune the self-attention layers using **LoRA** with the following configuration:
 
-- **Gemma-2 Model**: Utilizes GemmaTokenizerFast for tokenization and is fine-tuned using LoRA.
-- **Llama Model**: Tokenized using AutoTokenizer and also fine-tuned with LoRA, but utilizing 8-bit precision for memory efficiency.
+```python
+lora_config = LoraConfig(
+    r=config.lora_r,
+    lora_alpha=config.lora_alpha,
+    target_modules=["q_proj", "k_proj", "v_proj","o_proj","gate_proj"],
+    lora_dropout=config.lora_dropout,
+    bias="none",
+    task_type=TaskType.SEQ_CLS,
+)
+```
 
-## Tokenization Strategy
+#### Model Training
 
-- Tokenization is handled separately for both models, with the option to spread the maximum sequence length among the user prompt and responses.
-- Different tokenization formats are applied for Gemma and Llama models to fit their architectures.
+The model is prepared for 4-bit training using **PEFT** and **BitsAndBytes** for optimized memory usage.
 
-## Performance Optimization
+```python
+trainer = Trainer(
+    args=training_args,
+    model=model,
+    tokenizer=tokenizer,
+    train_dataset=ds_train,
+    eval_dataset=ds_eval,
+    compute_metrics=compute_metrics,
+    data_collator=DataCollatorWithPadding(tokenizer=tokenizer),
+)
+trainer.train()
+```
 
-- **ThreadPoolExecutor**: Runs both models in parallel, drastically reducing inference time.
-- **Mixed Precision Inference**: Inference is performed using `torch.cuda.amp.autocast()` for faster computations without compromising on precision.
-- **Efficient Memory Usage**: Models are loaded with memory-efficient settings using BitsAndBytes, reducing the memory footprint while preserving computational power.
+### Inference
 
-## Running the Project
+The `inference.ipynb` notebook loads the fine-tuned model and performs inference on test data. It supports **Test-Time Augmentation (TTA)** to improve accuracy by swapping model responses.
 
-### Unfortunately you can't directly run the code in your end, because the source data is too big to upload to GitHub :(
+Example configuration for inference:
 
-1. **Data Loading**: Load the input data from a CSV file.
-2. **Data Preprocessing**: Process the user prompt and model responses by cleaning and tokenizing the text.
-3. **Model Inference**: Run inference using both the Gemma and Llama models in parallel.
-4. **Result Aggregation**: Combine the results from both models to generate the final prediction for user preferences.
+```python
+@dataclass
+class Config:
+    gemma_dir = '/path/to/gemma-2'
+    lora_dir = '/path/to/lora-checkpoint'
+    max_length = 2048
+    batch_size = 4
+```
 
-### Code Snippet Example
+Perform inference with multi-GPU support:
 
 ```python
 @torch.no_grad()
 @torch.cuda.amp.autocast()
-def inference(df, model, tokenizer, device, batch_size=cfg.batch_size, max_length=cfg.max_length):
-    # Inference logic for processing batches of data
-    # Returns the probability scores for model A, model B, and ties.
+def inference(df, model, device, batch_size, max_length):
+    # Perform inference on the dataset
 ```
 
+## Results
 
-## Conclusion
+- **Evaluation Set Log Loss**: 0.9371
+- **Public LB Log Loss**: 0.941
+- **Inference Time**: ~4 hours for max_length=2048
 
-This project demonstrates how modern techniques like RLHF, PEFT, and multi-threaded inference can be effectively used to predict human preferences in AI-generated conversations. The work done here forms a foundation for developing more intuitive, human-aligned AI systems capable of understanding and catering to user preferences in real-time.
+## Model
 
+Utilize **Gemma-2 9b** model fine-tuned with **LoRA** adapters. The model is loaded and split across GPUs for efficient inference. 
+
+```python
+model_0 = Gemma2ForSequenceClassification.from_pretrained(cfg.gemma_dir, device_map=device_0)
+model_1 = Gemma2ForSequenceClassification.from_pretrained(cfg.gemma_dir, device_map=device_1)
+model_0 = PeftModel.from_pretrained(model_0, cfg.lora_dir)
+model_1 = PeftModel.from_pretrained(model_1, cfg.lora_dir)
+```
